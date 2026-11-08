@@ -1,0 +1,106 @@
+name: Pipeline Montage Formation
+
+on:
+  # Déclenchement manuel depuis l'interface GitHub
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Numéro du module à traiter (1-6, ou 'all' pour tous)"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+
+  # Déclenchement automatique à chaque push sur main
+  push:
+    branches:
+      - main
+    paths:
+      - "_work/scripts/**"
+      - "requirements.txt"
+
+jobs:
+  pipeline:
+    name: "🎬 Montage Module ${{ github.event.inputs.module || 'all' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: 📥 Checkout du dépôt
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 🔧 Installer ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+
+      - name: 📦 Installer les dépendances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🧪 Vérifier les scripts (lint)
+        run: |
+          python -m py_compile _work/scripts/convert_fps.py
+          python -m py_compile _work/scripts/full_pipeline.py
+          echo "✅ Scripts valides"
+
+      - name: 🎬 Lancer le pipeline
+        run: |
+          MODULE="${{ github.event.inputs.module || 'all' }}"
+          echo "Lancement du pipeline pour : $MODULE"
+          if [ "$MODULE" = "all" ]; then
+            echo "⚠️  Mode 'all' : les vidéos sources doivent être présentes dans le runner."
+            echo "    En CI pure, utilisez des artifacts ou un stockage externe (S3, etc.)."
+            echo "    Simulation du pipeline (dry-run) :"
+            python - <<'PYEOF'
+          import sys
+          sys.path.insert(0, '_work/scripts')
+          from full_pipeline import MODULES
+          print(f"Modules à traiter : {[m['num'] for m in MODULES]}")
+          print("✅ Import du pipeline OK — vidéos sources non présentes en CI (dry-run)")
+          PYEOF
+          else
+            echo "Module sélectionné : $MODULE"
+            python - <<PYEOF
+          import sys
+          sys.path.insert(0, '_work/scripts')
+          from full_pipeline import MODULES
+          mod = next((m for m in MODULES if str(m['num']) == "$MODULE"), None)
+          if mod:
+              print(f"Module {mod['num']} : vidéo={mod['video']}, audio={mod['audio']}")
+              print("✅ Paramètres du module OK")
+          else:
+              print(f"❌ Module $MODULE introuvable", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+          fi
+
+      - name: 📊 Résumé du pipeline
+        if: always()
+        run: |
+          echo "## Résumé 🎬" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Paramètre | Valeur |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | ${{ github.event.inputs.module || 'all' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branche | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | ubuntu-latest |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scripts détectés :" >> $GITHUB_STEP_SUMMARY
+          ls _work/scripts/ >> $GITHUB_STEP_SUMMARY
